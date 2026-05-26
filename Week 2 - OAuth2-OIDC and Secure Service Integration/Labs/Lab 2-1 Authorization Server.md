@@ -155,7 +155,7 @@ Before you start, two design decisions in this lab are worth flagging because th
 
 **Subject (`sub`) is a stable domain identifier, not the login name.** OIDC requires `sub` to be stable, non-reassignable, and unique within the issuer. Login names ("alice") fail all three: they change, they can be reassigned, and they are display-oriented. In this lab, `sub` is the customer ID (`C001`) for account holders, the employee ID (`EM01`) for tellers, and the auditor ID (`AUD01`) for auditors. The login name goes into the standard OIDC `preferred_username` claim. The payoff appears in the Resource Server exercises: when your domain model keys `Account` by `customerId`, an authorization check is literally `account.customerId.equals(authentication.getName())` with no translation step.
 
-**Roles and scopes answer different questions.** A role describes who the user *is* (`account_holder`, `teller`, `auditor`) — coarse-grained and stable across sessions. A scope describes what *this token* is allowed to do (`account.read`, `account.write`, ...) — fine-grained and per-token. In OAuth, a single user may legitimately request a token with only a subset of the scopes their role entitles them to (principle of least privilege per token). You will see both in your `@PreAuthorize` expressions in Lab 2-2: `hasRole('TELLER')` for ownership-style checks and `hasAuthority('SCOPE_account.write')` for capability checks.
+**Roles and scopes answer different questions.** A role describes who the user *is* (`account_holder`, `teller`, `auditor`) - coarse-grained and stable across sessions. A scope describes what *this token* is allowed to do (`account.read`, `account.write`, ...) - fine-grained and per-token. In OAuth, a single user may legitimately request a token with only a subset of the scopes their role entitles them to (principle of least privilege per token). You will see both in your `@PreAuthorize` expressions in Lab 2-2: `hasRole('TELLER')` for ownership-style checks and `hasAuthority('SCOPE_account.write')` for capability checks.
 
 #### The users and clients this lab defines
 
@@ -200,6 +200,24 @@ Delete `src/main/resources/application.properties` if it exists and create `src/
 ```yaml
 server:
   port: 9000
+
+spring:
+  security:
+    oauth2:
+      authorizationserver:
+        # Pin the issuer URI explicitly. Without this setting, Spring infers
+        # the issuer from the host of the first incoming request -- which
+        # means it could become "http://localhost:9000" or "http://127.0.0.1:9000"
+        # depending on which one happened to hit the server first. Resource
+        # servers and OAuth clients in later labs match the iss claim
+        # against a configured issuer-uri string exactly, so the issuer
+        # must be deterministic.
+        #
+        # 127.0.0.1 (not localhost) is chosen because Lab 2-1's redirect URI
+        # for bank-spa is http://127.0.0.1:9000/authorized. The authorize
+        # URL and the redirect URI must use the same host or the browser
+        # loses the session cookie on the redirect.
+        issuer: http://127.0.0.1:9000
 
 logging:
   level:
@@ -657,7 +675,7 @@ public class AuthorizationServerConfig {
     //
     // The Authorization Server signs JWTs with the private key.
     // Resource Servers verify JWTs using the public key, fetched from:
-    //   http://localhost:9000/oauth2/jwks
+    //   http://127.0.0.1:9000/oauth2/jwks
     //
     // A new key pair is generated in memory on each startup. Any token issued
     // before a restart is immediately invalid because the new public key will
@@ -706,12 +724,16 @@ public class AuthorizationServerConfig {
     // server issues. Resource Servers are configured with this URI and reject
     // any token where "iss" does not match. This prevents a token issued for
     // one system from being replayed against a different system.
+    //
+    // We use the default builder here. The issuer is configured in
+    // application.yml via spring.security.oauth2.authorizationserver.issuer.
+    // Putting it there (rather than hardcoding it in Java) means it is set
+    // in one place, can be overridden per environment without recompiling,
+    // and cannot accidentally diverge from the property file.
     // -------------------------------------------------------------------------
     @Bean
     public AuthorizationServerSettings authorizationServerSettings() {
-        return AuthorizationServerSettings.builder()
-                .issuer("http://localhost:9000")
-                .build();
+        return AuthorizationServerSettings.builder().build();
     }
 }
 ```
@@ -735,7 +757,7 @@ Open the following URLs in your browser to confirm the server is running and exp
 **JWKS endpoint**, the public keys Resource Servers use to verify signatures:
 
 ```
-http://localhost:9000/oauth2/jwks
+http://127.0.0.1:9000/oauth2/jwks
 ```
 
 Expected response:
@@ -754,10 +776,10 @@ Expected response:
 **Discovery endpoint**, the document that clients and Resource Servers use to auto-configure:
 
 ```
-http://localhost:9000/.well-known/oauth-authorization-server
+http://127.0.0.1:9000/.well-known/oauth-authorization-server
 ```
 
-Note the `issuer`, `token_endpoint`, and `jwks_uri` fields in the response. These are the values you will configure in the resource servers during the rest of Module 3.
+Note the `issuer`, `token_endpoint`, and `jwks_uri` fields in the response. They should all use `http://127.0.0.1:9000` -- if any of them reads `http://localhost:9000` instead, the issuer setting in `application.yml` is not taking effect. Stop the application fully (red square in IntelliJ, not just DevTools reload), restart it, and check again. These are the values you will configure in the resource servers during the rest of Module 3.
 
 ### Task 1.6: Obtain Your First Tokens
 
@@ -766,7 +788,7 @@ Create `auth-requests.http` in the project root:
 ```http
 ### Client Credentials token. Service identity, no user involved.
 ### The Authorization header is Base64("bank-service:bank-service-secret").
-POST http://localhost:9000/oauth2/token
+POST http://127.0.0.1:9000/oauth2/token
 Authorization: Basic YmFuay1zZXJ2aWNlOmJhbmstc2VydmljZS1zZWNyZXQ=
 Content-Type: application/x-www-form-urlencoded
 
@@ -818,7 +840,7 @@ Execute the Client Credentials request first. You should receive:
 }
 ```
 
-Copy the `access_token` value and paste it into the decoder at [https://jwt.io](https://jwt.io). Note that the payload contains `iss`, `sub` (which is `bank-service`, the client ID), `aud`, `exp`, `iat`, and `scope` — but no `roles`, `preferred_username`, or `name`. That is the expected behaviour for a client-credentials token; no user is present.
+Copy the `access_token` value and paste it into the decoder at [https://jwt.io](https://jwt.io). Note that the payload contains `iss`, `sub` (which is `bank-service`, the client ID), `aud`, `exp`, `iat`, and `scope` - but no `roles`, `preferred_username`, or `name`. That is the expected behaviour for a client-credentials token; no user is present.
 
 Now run the Authorization Code flow as **alice**. Decode the resulting token and confirm:
 
@@ -826,7 +848,7 @@ Now run the Authorization Code flow as **alice**. Decode the resulting token and
 - `preferred_username` is `alice`
 - `name` is `Alice Nguyen`
 - `roles` is `["account_holder"]`
-- `scope` is `openid profile account.read account.write transaction.read transaction.create customer.read` — `account.create` and `customer.write` are absent because alice is not entitled to them, even though the client requested them.
+- `scope` is `openid profile account.read account.write transaction.read transaction.create customer.read` - `account.create` and `customer.write` are absent because alice is not entitled to them, even though the client requested them.
 
 Repeat as **edward** and confirm `scope` now includes `account.create` and `customer.write`. Repeat as **audit** and confirm `scope` is reduced to read-only.
 
@@ -852,10 +874,10 @@ Repeat as **edward** and confirm `scope` now includes `account.create` and `cust
 
 | Item | Value |
 |---|---|
-| Authorization Server URL | `http://localhost:9000` |
-| JWKS endpoint | `http://localhost:9000/oauth2/jwks` |
-| Issuer URI | `http://localhost:9000` |
-| Token endpoint | `http://localhost:9000/oauth2/token` |
+| Authorization Server URL | `http://127.0.0.1:9000` |
+| JWKS endpoint | `http://127.0.0.1:9000/oauth2/jwks` |
+| Issuer URI | `http://127.0.0.1:9000` |
+| Token endpoint | `http://127.0.0.1:9000/oauth2/token` |
 | Public client ID | `bank-spa` |
 | Service client ID | `bank-service` |
 | Service client secret | `bank-service-secret` |
@@ -886,7 +908,7 @@ Repeat as **edward** and confirm `scope` now includes `account.create` and `cust
 
 **Port 9000 is already in use**
 
-Change `server.port` in `application.yml` to another port, update `issuer` in `AuthorizationServerSettings` to match, and use the new port when configuring the resource servers in Module 3.
+Change `server.port` in `application.yml` to another port. Also update `spring.security.oauth2.authorizationserver.issuer` in `application.yml` to match the new port (for example, `http://127.0.0.1:9001`). Use the same port everywhere when configuring the resource servers in Module 3.
 
 **The application fails to start with a `NoSuchBeanDefinitionException`**
 
@@ -902,11 +924,25 @@ The `instanceof BankUser` check in the token customizer is returning false, so t
 
 **Token contains scopes the user shouldn't have**
 
-The token customizer's intersection step is not running. If the `scope` claim in the decoded token is a JSON *array* rather than a space-separated *string*, the customizer didn't write it at all — see the troubleshooting entry above (the `instanceof BankUser` check is failing). If `scope` is a string but contains the wrong scopes, the user's `allowedScopes` constant is wrong; verify the `ACCOUNT_HOLDER_SCOPES`, `TELLER_SCOPES`, and `AUDITOR_SCOPES` constants at the top of `AuthorizationServerConfig` match the lab spec.
+The token customizer's intersection step is not running. If the `scope` claim in the decoded token is a JSON *array* rather than a space-separated *string*, the customizer didn't write it at all - see the troubleshooting entry above (the `instanceof BankUser` check is failing). If `scope` is a string but contains the wrong scopes, the user's `allowedScopes` constant is wrong; verify the `ACCOUNT_HOLDER_SCOPES`, `TELLER_SCOPES`, and `AUDITOR_SCOPES` constants at the top of `AuthorizationServerConfig` match the lab spec.
 
-**The flow asks me to log in twice — once before consent, once after**
+**The flow asks me to log in twice - once before consent, once after**
 
 This is a session cookie issue, not a security misconfiguration. The browser treats `localhost` and `127.0.0.1` as different origins, so a session cookie set during login on `localhost:9000` is not sent on the redirect to `127.0.0.1:9000`. Use the same host throughout: the authorize URL in `auth-requests.http` uses `http://127.0.0.1:9000` to match the registered redirect URI `http://127.0.0.1:9000/authorized`. If you copy-pasted the URL but changed the host to `localhost`, change it back to `127.0.0.1`.
+
+**A downstream Resource Server or OAuth client fails to start with `The Issuer "http://localhost:9000" provided in the configuration metadata did not match the requested issuer "http://127.0.0.1:9000"` (or vice versa)**
+
+This appears later in the lab series, not in Lab 2-1 itself, but the fix lives here.
+
+The downstream service is requesting the discovery document at one host (say `127.0.0.1`) and the Auth Server is publishing endpoints under the other host (say `localhost`). Spring's strict matching rejects the mismatch.
+
+Verify what the Auth Server is actually publishing by opening the discovery document in a browser:
+
+```
+http://127.0.0.1:9000/.well-known/oauth-authorization-server
+```
+
+The `issuer` field at the top of the JSON should be `"http://127.0.0.1:9000"`. If it says `"http://localhost:9000"`, the `spring.security.oauth2.authorizationserver.issuer` setting in `application.yml` is not being applied. Stop the Auth Server fully (red square in IntelliJ, not just DevTools reload), confirm the setting is present in `application.yml`, and restart. If a Java config bean is also calling `.issuer(...)` on the `AuthorizationServerSettings` builder, it will override the yaml - remove that call. Lab 2-1's reference Task 1.3 deliberately uses `AuthorizationServerSettings.builder().build()` with no `.issuer(...)` so the yaml is the only source of truth.
 
 **Tokens become invalid after restarting the server**
 

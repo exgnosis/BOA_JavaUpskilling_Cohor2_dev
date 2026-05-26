@@ -11,6 +11,10 @@
 - Updated week three labs to use the Docker Oracle option to avoid the issues from last class using Oracle installed in the VM
 - Updated the week four Kafka labs
 
+## May 26
+- All labs and slides uploaded
+
+
 
 
 
